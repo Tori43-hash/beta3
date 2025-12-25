@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { PenTool, Eraser, Move, Undo, Palette, Minus, X, ArrowRight, Square, Circle, Type, MousePointer2 } from 'lucide-react';
 import { DebouncedColorInput } from '../common/DebouncedColorInput';
+import { STORAGE_KEYS } from '../../constants';
 
 interface Transform {
   scale: number;
@@ -18,7 +19,7 @@ interface Point {
   y: number;
 }
 
-type ElementType = 'pencil' | 'line' | 'arrow' | 'rectangle' | 'circle' | 'text';
+type ElementType = 'pencil' | 'eraser' | 'line' | 'arrow' | 'rectangle' | 'circle' | 'text';
 
 interface CanvasElement {
   id: string;
@@ -52,7 +53,7 @@ const worldToScreen = (worldX: number, worldY: number, scale: number, offset: { 
 
 // Calculate bounding box for an element
 const getElementBounds = (element: CanvasElement): { minX: number; minY: number; maxX: number; maxY: number } => {
-  if (element.type === 'pencil' && element.points && element.points.length > 0) {
+  if ((element.type === 'pencil' || element.type === 'eraser') && element.points && element.points.length > 0) {
     let minX = element.points[0].x;
     let minY = element.points[0].y;
     let maxX = element.points[0].x;
@@ -140,7 +141,7 @@ const getElementAtPosition = (
     }
     
     // Detailed hit testing
-    if (element.type === 'pencil' && element.points) {
+    if ((element.type === 'pencil' || element.type === 'eraser') && element.points) {
       // Check distance to any point in the path
       for (const point of element.points) {
         const dist = Math.sqrt((worldX - point.x) ** 2 + (worldY - point.y) ** 2);
@@ -218,7 +219,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
   const [showDebug, setShowDebug] = useState(false);
   const [showGrid, setShowGrid] = useState(false);
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
-  const [textInputState, setTextInputState] = useState<{ x: number; y: number; elementId: string | null } | null>(null);
+  const [textInputState, setTextInputState] = useState<{ x: number; y: number; worldX: number; worldY: number; elementId: string | null } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [tick, setTick] = useState(0);
@@ -236,8 +237,32 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
 
   const colors = ['#000000', '#FF0000', '#0000FF', '#00FF00'];
 
+  // Debounce utility for localStorage saves
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debouncedSave = useCallback(() => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    saveTimeoutRef.current = setTimeout(() => {
+      try {
+        localStorage.setItem(STORAGE_KEYS.WHITEBOARD, JSON.stringify(elementsRef.current));
+      } catch (error) {
+        console.error('Failed to save whiteboard data:', error);
+      }
+    }, 250);
+  }, []);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, []);
+
   // Render a single element
-  const renderElement = useCallback((ctx: CanvasRenderingContext2D, element: CanvasElement) => {
+  const renderElement = useCallback((ctx: CanvasRenderingContext2D, element: CanvasElement, transformScale: number = 1) => {
     ctx.save();
     
     if (element.type === 'pencil' && element.points) {
@@ -248,7 +273,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
       
       ctx.beginPath();
       ctx.strokeStyle = element.color;
-      ctx.lineWidth = element.size;
+      ctx.lineWidth = element.size / transformScale;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.globalCompositeOperation = 'source-over';
@@ -258,10 +283,29 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
         ctx.lineTo(element.points[i].x, element.points[i].y);
       }
       ctx.stroke();
+    } else if (element.type === 'eraser' && element.points) {
+      if (element.points.length < 2) {
+        ctx.restore();
+        return;
+      }
+      
+      ctx.beginPath();
+      ctx.strokeStyle = element.color;
+      ctx.lineWidth = element.size / transformScale;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.globalCompositeOperation = 'destination-out';
+
+      ctx.moveTo(element.points[0].x, element.points[0].y);
+      for (let i = 1; i < element.points.length; i++) {
+        ctx.lineTo(element.points[i].x, element.points[i].y);
+      }
+      ctx.stroke();
+      ctx.globalCompositeOperation = 'source-over';
     } else if (element.type === 'line' && element.endX !== undefined && element.endY !== undefined) {
       ctx.beginPath();
       ctx.strokeStyle = element.color;
-      ctx.lineWidth = element.size;
+      ctx.lineWidth = element.size / transformScale;
       ctx.moveTo(element.x, element.y);
       ctx.lineTo(element.endX, element.endY);
       ctx.stroke();
@@ -269,7 +313,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
       // Draw line
       ctx.beginPath();
       ctx.strokeStyle = element.color;
-      ctx.lineWidth = element.size;
+      ctx.lineWidth = element.size / transformScale;
       ctx.moveTo(element.x, element.y);
       ctx.lineTo(element.endX, element.endY);
       ctx.stroke();
@@ -294,7 +338,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
       ctx.fill();
     } else if (element.type === 'rectangle' && element.endX !== undefined && element.endY !== undefined) {
       ctx.strokeStyle = element.color;
-      ctx.lineWidth = element.size;
+      ctx.lineWidth = element.size / transformScale;
       const width = element.endX - element.x;
       const height = element.endY - element.y;
       ctx.strokeRect(element.x, element.y, width, height);
@@ -307,7 +351,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
       
       ctx.beginPath();
       ctx.strokeStyle = element.color;
-      ctx.lineWidth = element.size;
+      ctx.lineWidth = element.size / transformScale;
       ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
       ctx.stroke();
     } else if (element.type === 'text' && element.text) {
@@ -375,7 +419,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
     }
 
     elementsRef.current.forEach(element => {
-      renderElement(ctx, element);
+      renderElement(ctx, element, transform.scale);
     });
   }, [transform, renderElement, showGrid]);
 
@@ -397,7 +441,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
     
     // Draw current element being drawn
     if (currentElementRef.current) {
-      renderElement(ctx, currentElementRef.current);
+      renderElement(ctx, currentElementRef.current, transform.scale);
     }
     
     // Draw selection bounding box
@@ -490,10 +534,11 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
       if (previousSnapshot) {
         elementsRef.current = JSON.parse(JSON.stringify(previousSnapshot));
         setUndoCount(historyIndexRef.current > 0 ? historyIndexRef.current - 1 : 0);
+        debouncedSave();
         scheduleStaticRedraw();
       }
     }
-  }, [scheduleStaticRedraw]);
+  }, [scheduleStaticRedraw, debouncedSave]);
 
   const handleRedo = useCallback(() => {
     if (redoStackRef.current.length > 0) {
@@ -509,10 +554,11 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
         // Restore state
         elementsRef.current = JSON.parse(JSON.stringify(nextSnapshot));
         setUndoCount(historyIndexRef.current > 1 ? historyIndexRef.current - 1 : 0);
+        debouncedSave();
         scheduleStaticRedraw();
       }
     }
-  }, [scheduleStaticRedraw]);
+  }, [scheduleStaticRedraw, debouncedSave]);
 
   // Handle Resize
   useEffect(() => {
@@ -553,6 +599,29 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
         window.removeEventListener('resize', handleResize);
         resizeObserver.disconnect();
     };
+  }, [scheduleStaticRedraw]);
+
+  // Load whiteboard data from localStorage on mount
+  const dataLoadedRef = useRef(false);
+  useEffect(() => {
+    if (!dataLoadedRef.current) {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEYS.WHITEBOARD);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) {
+            elementsRef.current = parsed;
+            dataLoadedRef.current = true;
+            scheduleStaticRedraw();
+          }
+        } else {
+          dataLoadedRef.current = true;
+        }
+      } catch (error) {
+        console.error('Failed to load whiteboard data:', error);
+        dataLoadedRef.current = true;
+      }
+    }
   }, [scheduleStaticRedraw]);
 
   // Redraw static canvas when transform or elements change
@@ -629,10 +698,11 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
       saveToHistory();
       elementsRef.current = elementsRef.current.filter(el => el.id !== selectedElementId);
       setSelectedElementId(null);
+      debouncedSave();
       scheduleStaticRedraw();
       scheduleActiveRedraw();
     }
-  }, [selectedElementId, scheduleStaticRedraw, scheduleActiveRedraw, saveToHistory]);
+  }, [selectedElementId, scheduleStaticRedraw, scheduleActiveRedraw, saveToHistory, debouncedSave]);
 
   // Keyboard Handler (Undo, Delete)
   useEffect(() => {
@@ -751,13 +821,15 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
 
     // Text tool
     if (tool === 'text') {
-      const screenPos = worldToScreen(worldPos.x, worldPos.y, transform.scale, transform.offset);
       const canvas = staticCanvasRef.current;
       if (canvas) {
         const rect = canvas.getBoundingClientRect();
+        const screenPos = worldToScreen(worldPos.x, worldPos.y, transform.scale, transform.offset);
         setTextInputState({
           x: rect.left + screenPos.x / (window.devicePixelRatio || 1),
           y: rect.top + screenPos.y / (window.devicePixelRatio || 1),
+          worldX: worldPos.x,
+          worldY: worldPos.y,
           elementId: null
         });
       }
@@ -769,7 +841,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
     if (tool === 'pen' || tool === 'eraser') {
       currentElementRef.current = {
         id: Date.now().toString(),
-        type: 'pencil',
+        type: tool === 'eraser' ? 'eraser' : 'pencil',
         x: worldPos.x,
         y: worldPos.y,
         points: [worldPos],
@@ -861,6 +933,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
     if (isDraggingRef.current) {
         isDraggingRef.current = false;
         saveToHistory();
+        debouncedSave();
         scheduleStaticRedraw();
         scheduleActiveRedraw();
         return;
@@ -871,7 +944,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
         
         // Validate element before adding
         let isValid = false;
-        if (currentElementRef.current.type === 'pencil' && currentElementRef.current.points && currentElementRef.current.points.length > 1) {
+        if ((currentElementRef.current.type === 'pencil' || currentElementRef.current.type === 'eraser') && currentElementRef.current.points && currentElementRef.current.points.length > 1) {
           isValid = true;
         } else if (currentElementRef.current.endX !== undefined && currentElementRef.current.endY !== undefined) {
           // For geometric shapes, check if there's actual size
@@ -883,6 +956,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
         if (isValid) {
           saveToHistory();
           elementsRef.current.push(currentElementRef.current);
+          debouncedSave();
         }
         currentElementRef.current = null;
         scheduleStaticRedraw();
@@ -921,16 +995,11 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
       return;
     }
 
-    const rect = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const screenX = (textInputState.x - rect.left) * dpr;
-    const worldPos = screenToWorld(screenX, (textInputState.y - rect.top) * dpr, transform.scale, transform.offset);
-
     const newElement: CanvasElement = {
       id: Date.now().toString(),
       type: 'text',
-      x: worldPos.x,
-      y: worldPos.y,
+      x: textInputState.worldX,
+      y: textInputState.worldY,
       text: text.trim(),
       color,
       size,
@@ -940,9 +1009,26 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "", transfor
 
     saveToHistory();
     elementsRef.current.push(newElement);
+    debouncedSave();
     setTextInputState(null);
     scheduleStaticRedraw();
-  }, [textInputState, transform, color, size, saveToHistory, scheduleStaticRedraw]);
+  }, [textInputState, transform, color, size, saveToHistory, scheduleStaticRedraw, debouncedSave]);
+
+  // Update text input position when transform changes
+  useEffect(() => {
+    if (textInputState) {
+      const canvas = staticCanvasRef.current;
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const screenPos = worldToScreen(textInputState.worldX, textInputState.worldY, transform.scale, transform.offset);
+        setTextInputState({
+          ...textInputState,
+          x: rect.left + screenPos.x / (window.devicePixelRatio || 1),
+          y: rect.top + screenPos.y / (window.devicePixelRatio || 1)
+        });
+      }
+    }
+  }, [transform]);
 
   // Focus textarea when it appears
   useEffect(() => {
