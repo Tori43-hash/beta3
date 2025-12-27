@@ -8,11 +8,8 @@ import { TradeModal, PreferencesModal } from './components/modals/Modals';
 const Stats = React.lazy(() => 
   import('./components/dashboard/Stats').then(module => ({ default: module.Stats }))
 );
-const Traders = React.lazy(() => 
-  import('./components/traders/Traders').then(module => ({ default: module.Traders }))
-);
-const Profile = React.lazy(() => 
-  import('./components/traders/Traders').then(module => ({ default: module.Profile }))
+const PlanningBoard = React.lazy(() => 
+  import('./components/planning/PlanningBoard').then(module => ({ default: module.PlanningBoard }))
 );
 const TradeDetail = React.lazy(() => 
   import('./components/journal/TradeDetail').then(module => ({ default: module.TradeDetail }))
@@ -20,11 +17,11 @@ const TradeDetail = React.lazy(() =>
 
 // Preload functions for hover-based preloading
 const preloadStats = () => import('./components/dashboard/Stats');
-const preloadTraders = () => import('./components/traders/Traders');
+const preloadPlanningBoard = () => import('./components/planning/PlanningBoard');
 const preloadTradeDetail = () => import('./components/journal/TradeDetail');
 
-import { Trade, Trader } from './types';
-import { DEFAULT_TRADERS, DEFAULT_TRADE, STORAGE_KEYS } from './constants';
+import { Trade } from './types';
+import { DEFAULT_TRADE, STORAGE_KEYS } from './constants';
 import { useWindowSize } from './hooks/useWindowSize';
 import { useTrades } from './hooks/useTrades';
 import { useLayoutConfig } from './hooks/useLayoutConfig';
@@ -38,6 +35,7 @@ const App: React.FC = () => {
 
   const [navPosition, setNavPosition] = useState<'bottom' | 'top' | 'left' | 'right'>('bottom');
   const [isPreferencesOpen, setIsPreferencesOpen] = useState(false);
+  const [isUIHidden, setIsUIHidden] = useState<boolean>(false);
   const [journalKey, setJournalKey] = useState(0);
   const prevTabRef = useRef<string>('dashboard');
   const [skipContainerTransition, setSkipContainerTransition] = useState(false);
@@ -63,7 +61,6 @@ const App: React.FC = () => {
 
   // Navigation details state
   const [activeTrade, setActiveTrade] = useState<Trade | null>(null);
-  const [selectedTrader, setSelectedTrader] = useState<Trader | null>(null);
 
   const changeTab = useCallback((tab: string) => {
     if (tab === currentTab) return;
@@ -118,10 +115,6 @@ const App: React.FC = () => {
     changeTab('journal');
   }, [updateTrade, changeTab]);
 
-  const openProfile = useCallback((trader: Trader) => {
-    setSelectedTrader(trader);
-    changeTab('profile');
-  }, [changeTab]);
 
   // Memoized calculations
   const { totalPnL, winrate } = useMemo(() => {
@@ -153,6 +146,44 @@ const App: React.FC = () => {
   // Track previous tab for Journal animation skip
   useEffect(() => {
     prevTabRef.current = currentTab;
+  }, [currentTab]);
+
+  // Listen for UI hidden state changes from whiteboards (only when on Canvas tab)
+  useEffect(() => {
+    const checkUIHidden = () => {
+      // Only check if we're on a Canvas tab
+      if (currentTab === 'traders') {
+        const planningHidden = localStorage.getItem('whiteboard-ui-hidden');
+        const tradersHidden = localStorage.getItem('traders-whiteboard-ui-hidden');
+        // Default to false if no value exists, or parse the stored value
+        const hidden = planningHidden ? JSON.parse(planningHidden) : (tradersHidden ? JSON.parse(tradersHidden) : false);
+        setIsUIHidden(hidden);
+      } else {
+        // Reset to false when not on Canvas tab
+        setIsUIHidden(false);
+      }
+    };
+
+    // Check on mount and when tab changes
+    checkUIHidden();
+    
+    // Listen for storage events (other tabs)
+    window.addEventListener('storage', checkUIHidden);
+    
+    // Listen for custom events (same tab)
+    const handleUIHiddenChanged = (e: Event) => {
+      // Only update if we're on a Canvas tab
+      if (currentTab === 'traders') {
+        const customEvent = e as CustomEvent<{ isUIHidden: boolean }>;
+        setIsUIHidden(customEvent.detail.isUIHidden);
+      }
+    };
+    window.addEventListener('ui-hidden-changed', handleUIHiddenChanged);
+    
+    return () => {
+      window.removeEventListener('storage', checkUIHidden);
+      window.removeEventListener('ui-hidden-changed', handleUIHiddenChanged);
+    };
   }, [currentTab]);
 
   const getLayoutPadding = useCallback(() => {
@@ -209,6 +240,7 @@ const App: React.FC = () => {
         scale={layoutConfig.menuScale}
         edgeOffset={layoutConfig.edgeOffset}
         onOpenSettings={() => setIsPreferencesOpen(true)}
+        isUIHidden={isUIHidden}
       />
       
       <main className="w-full relative">
@@ -260,14 +292,14 @@ const App: React.FC = () => {
               </div>
             )}
 
-            {/* Traders (Whiteboard) - Render if visited. Important: keeps canvas memory alive */}
+            {/* Planning Board (Whiteboard) - Render if visited. Important: keeps canvas memory alive */}
             {(visitedTabs.has('traders') || currentTab === 'traders') && (
               <div 
                 className={`${currentTab === 'traders' ? '' : ''}`}
-                style={{ display: currentTab === 'traders' ? 'block' : 'none', height: '80vh' }}
+                style={{ display: currentTab === 'traders' ? 'block' : 'none' }}
               >
                 <Suspense fallback={<div className="flex items-center justify-center h-64 text-slate-400">Loading Whiteboard...</div>}>
-                  <Traders tradersList={DEFAULT_TRADERS} openProfile={openProfile} />
+                  <PlanningBoard />
                 </Suspense>
               </div>
             )}
@@ -295,21 +327,6 @@ const App: React.FC = () => {
               </div>
             )}
 
-            {/* Sub-views (kept conditional for now as they are specific contexts) */}
-            {currentTab === 'profile' && selectedTrader && (
-              <div className={`page-content page-active ${isBlurActive ? 'page-content-blur' : ''}`}>
-                <Suspense fallback={
-                  <div className="flex items-center justify-center h-64 text-slate-400">
-                    <div className="flex flex-col items-center gap-2">
-                      <div className="w-8 h-8 border-2 border-slate-300 border-t-slate-800 rounded-full animate-spin"></div>
-                      <span className="text-xs">Loading Profile...</span>
-                    </div>
-                  </div>
-                }>
-                  <Profile trader={selectedTrader} goBack={() => changeTab('traders')} />
-                </Suspense>
-              </div>
-            )}
 
             {currentTab === 'trade-detail' && activeTrade && (
               <div className={`page-content page-active ${isBlurActive ? 'page-content-blur' : ''}`}>

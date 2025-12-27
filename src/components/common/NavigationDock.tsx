@@ -9,9 +9,10 @@ interface NavigationDockProps {
   scale: number;
   edgeOffset: number;
   onOpenSettings: () => void;
+  isUIHidden?: boolean;
 }
 
-const NavigationDockComponent: React.FC<NavigationDockProps> = ({ currentTab, changeTab, onNavHover, position, scale, edgeOffset, onOpenSettings }) => {
+const NavigationDockComponent: React.FC<NavigationDockProps> = ({ currentTab, changeTab, onNavHover, position, scale, edgeOffset, onOpenSettings, isUIHidden = false }) => {
   const menuItems = useMemo(() => [
     { id: 'dashboard', icon: Home, label: 'Dashboard' },
     { id: 'stats', icon: BarChart2, label: 'Analytics' },
@@ -71,6 +72,10 @@ const NavigationDockComponent: React.FC<NavigationDockProps> = ({ currentTab, ch
     }
     return styles;
   }, [position, edgeOffset, transform, transformOrigin]);
+
+  if (isUIHidden) {
+    return null;
+  }
 
   return (
     <nav 
