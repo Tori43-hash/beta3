@@ -60,6 +60,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
   const [tool, setTool] = useState<'pen' | 'eraser' | 'pan'>('pen');
   const [color, setColor] = useState('#000000');
   const [size, setSize] = useState(3);
+  const [showDebug, setShowDebug] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [shortcuts, setShortcuts] = useState<Shortcuts>(() => {
     const saved = localStorage.getItem('whiteboard-shortcuts');
@@ -296,6 +297,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
     // Draw selection rectangle if selecting
     if (isSelectingRef.current && selectionStartRef.current && selectionEndRef.current) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
+        const { scale, offset } = transformRef.current;
         const start = selectionStartRef.current;
         const end = selectionEndRef.current;
         
@@ -326,6 +328,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
     // Draw bounding box around selected strokes
     if (selectionBoundsRef.current && selectedStrokesRef.current.size > 0) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
+        const { scale, offset } = transformRef.current;
         const { minX, minY, maxX, maxY } = selectionBoundsRef.current;
         
         // Convert world coordinates to canvas coordinates
@@ -511,10 +514,6 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
     scheduleRedraw();
   }, [scheduleRedraw, saveToHistory]);
 
-  // Handle shortcut key capture state
-  const [capturingShortcut, setCapturingShortcut] = useState<keyof Shortcuts | null>(null);
-  const captureInputRef = useRef<HTMLDivElement>(null);
-
   // Handle Resize
   useEffect(() => {
     const handleResize = () => {
@@ -618,7 +617,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
     return () => {
         container.removeEventListener('wheel', handleWheel);
     };
-  }, [scheduleRedraw, zoomSpeed]);
+  }, [scheduleRedraw, zoomSpeed, showZoom]);
 
   // Save shortcuts to localStorage
   useEffect(() => {
@@ -650,11 +649,19 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
     localStorage.setItem('whiteboard-background-type', backgroundType);
   }, [backgroundType]);
 
+  // Save UI hidden state to localStorage
   useEffect(() => {
     localStorage.setItem('whiteboard-ui-hidden', JSON.stringify(isUIHidden));
     // Dispatch custom event for same-tab synchronization
     window.dispatchEvent(new CustomEvent('ui-hidden-changed', { detail: { isUIHidden } }));
   }, [isUIHidden]);
+
+  // Sync currentZoom with transformRef when showZoom is enabled
+  useEffect(() => {
+    if (showZoom) {
+      setCurrentZoom(transformRef.current.scale);
+    }
+  }, [showZoom]);
 
   // Clear selection when switching from pan to pen or eraser
   useEffect(() => {
@@ -675,12 +682,9 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
     }
   }, [tool, scheduleRedraw]);
 
-  // Sync currentZoom with transformRef when showZoom is enabled
-  useEffect(() => {
-    if (showZoom) {
-      setCurrentZoom(transformRef.current.scale);
-    }
-  }, [showZoom]);
+  // Handle shortcut key capture state
+  const [capturingShortcut, setCapturingShortcut] = useState<keyof Shortcuts | null>(null);
+  const captureInputRef = useRef<HTMLDivElement>(null);
 
   // Keyboard Handler
   useEffect(() => {
@@ -774,6 +778,88 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
     };
   }, [handleUndo, handleRedo, shortcuts, isSettingsOpen, capturingShortcut, clearCanvas, saveToHistory, scheduleRedraw]);
 
+  useEffect(() => {
+    if (capturingShortcut && captureInputRef.current) {
+      captureInputRef.current.focus();
+    }
+  }, [capturingShortcut]);
+
+  // Global keyboard handler for capturing shortcuts
+  useEffect(() => {
+    if (!capturingShortcut) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore modifier keys alone
+      if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) {
+        return;
+      }
+      
+      e.preventDefault();
+      e.stopPropagation();
+      
+      const newConfig: ShortcutConfig = {
+        key: e.key.toLowerCase(),
+        ctrl: e.ctrlKey || e.metaKey,
+        shift: e.shiftKey,
+        alt: e.altKey
+      };
+      
+      setShortcuts(prev => ({
+        ...prev,
+        [capturingShortcut]: newConfig
+      }));
+      
+      setCapturingShortcut(null);
+    };
+
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, { capture: true });
+    };
+  }, [capturingShortcut]);
+  
+  const handleShortcutKeyDown = (e: React.KeyboardEvent, shortcutKey: keyof Shortcuts) => {
+    // Ignore modifier keys alone
+    if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) {
+      return;
+    }
+    
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const newConfig: ShortcutConfig = {
+      key: e.key.toLowerCase(),
+      ctrl: e.ctrlKey || e.metaKey,
+      shift: e.shiftKey,
+      alt: e.altKey
+    };
+    
+    setShortcuts(prev => ({
+      ...prev,
+      [shortcutKey]: newConfig
+    }));
+    
+    setCapturingShortcut(null);
+  };
+
+  const resetShortcut = (shortcutKey: keyof Shortcuts) => {
+    setShortcuts(prev => ({
+      ...prev,
+      [shortcutKey]: DEFAULT_SHORTCUTS[shortcutKey]
+    }));
+  };
+
+  // Format shortcut for display
+  const formatShortcut = (config: ShortcutConfig | undefined): string => {
+    if (!config) return 'Not set';
+    const parts: string[] = [];
+    if (config.ctrl) parts.push('Ctrl');
+    if (config.shift) parts.push('Shift');
+    if (config.alt) parts.push('Alt');
+    parts.push(config.key?.toUpperCase() || '?');
+    return parts.join(' + ');
+  };
+
   // Mouse / Touch Handlers
   const getPointerPos = (e: React.MouseEvent | React.TouchEvent) => {
     const canvas = canvasRef.current;
@@ -810,7 +896,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
     if (!selectionBoundsRef.current || selectedStrokesRef.current.size === 0) return null;
     
     const { minX, minY, maxX, maxY } = selectionBoundsRef.current;
-    const { scale, offset } = transformRef.current;
+    const { scale } = transformRef.current;
     const handleSize = 8;
     const handleRadius = handleSize / scale; // Convert to world coordinates
     
@@ -832,6 +918,43 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
     }
     
     return null;
+  };
+
+  // Scale selected strokes
+  const scaleSelectedStrokes = (scaleX: number, scaleY: number, centerX: number, centerY: number) => {
+    if (selectedStrokesRef.current.size === 0) return;
+    
+    selectedStrokesRef.current.forEach((index) => {
+      const stroke = strokesRef.current[index];
+      if (!stroke) return;
+      
+      stroke.points = stroke.points.map((point) => {
+        const dx = point.x - centerX;
+        const dy = point.y - centerY;
+        return {
+          x: centerX + dx * scaleX,
+          y: centerY + dy * scaleY
+        };
+      });
+    });
+    
+    // Recalculate bounds
+    if (selectionBoundsRef.current) {
+      const { minX, minY, maxX, maxY } = selectionBoundsRef.current;
+      const width = maxX - minX;
+      const height = maxY - minY;
+      const newWidth = width * scaleX;
+      const newHeight = height * scaleY;
+      const newMinX = centerX - (centerX - minX) * scaleX;
+      const newMinY = centerY - (centerY - minY) * scaleY;
+      
+      selectionBoundsRef.current = {
+        minX: newMinX,
+        minY: newMinY,
+        maxX: newMinX + newWidth,
+        maxY: newMinY + newHeight
+      };
+    }
   };
 
   // Check if stroke intersects with selection rectangle
@@ -872,7 +995,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
     const isMouseEvent = 'button' in e;
     const isCtrlKey = isMouseEvent && ((e as React.MouseEvent).ctrlKey || (e as React.MouseEvent).metaKey);
     
-    // Check if clicking on a resize handle (check this FIRST, before other tools)
+    // Check if clicking on a resize handle
     if (selectedStrokesRef.current.size > 0 && selectionBoundsRef.current) {
       const pos = getPointerPos(e);
       const worldPos = toWorldPos(pos);
@@ -1099,6 +1222,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
         };
         lastMousePosRef.current = pos;
         scheduleRedraw();
+        setTick(t => t + 1);
         return;
     }
 
@@ -1214,86 +1338,10 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
     }
   };
 
-  // Format shortcut for display
-  const formatShortcut = (config: ShortcutConfig | undefined): string => {
-    if (!config) return 'Not set';
-    const parts: string[] = [];
-    if (config.ctrl) parts.push('Ctrl');
-    if (config.shift) parts.push('Shift');
-    if (config.alt) parts.push('Alt');
-    parts.push(config.key?.toUpperCase() || '?');
-    return parts.join(' + ');
-  };
-  
-  useEffect(() => {
-    if (capturingShortcut && captureInputRef.current) {
-      captureInputRef.current.focus();
-    }
-  }, [capturingShortcut]);
-
-  // Global keyboard handler for capturing shortcuts
-  useEffect(() => {
-    if (!capturingShortcut) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore modifier keys alone
-      if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) {
-        return;
-      }
-      
-      e.preventDefault();
-      e.stopPropagation();
-      
-      const newConfig: ShortcutConfig = {
-        key: e.key.toLowerCase(),
-        ctrl: e.ctrlKey || e.metaKey,
-        shift: e.shiftKey,
-        alt: e.altKey
-      };
-      
-      setShortcuts(prev => ({
-        ...prev,
-        [capturingShortcut]: newConfig
-      }));
-      
-      setCapturingShortcut(null);
-    };
-
-    window.addEventListener('keydown', handleKeyDown, { capture: true });
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown, { capture: true });
-    };
-  }, [capturingShortcut]);
-  
-  const handleShortcutKeyDown = (e: React.KeyboardEvent, shortcutKey: keyof Shortcuts) => {
-    // Ignore modifier keys alone
-    if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) {
-      return;
-    }
-    
-    e.preventDefault();
-    e.stopPropagation();
-    
-    const newConfig: ShortcutConfig = {
-      key: e.key.toLowerCase(),
-      ctrl: e.ctrlKey || e.metaKey,
-      shift: e.shiftKey,
-      alt: e.altKey
-    };
-    
-    setShortcuts(prev => ({
-      ...prev,
-      [shortcutKey]: newConfig
-    }));
-    
-    setCapturingShortcut(null);
-  };
-
-  const resetShortcut = (shortcutKey: keyof Shortcuts) => {
-    setShortcuts(prev => ({
-      ...prev,
-      [shortcutKey]: DEFAULT_SHORTCUTS[shortcutKey]
-    }));
+  const resetView = () => {
+    transformRef.current = { scale: 1, offset: { x: 0, y: 0 } };
+    scheduleRedraw();
+    setTick(t => t + 1);
   };
 
   return (
@@ -1314,6 +1362,27 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
         onTouchMove={handleMove}
         onTouchEnd={handleEnd}
       />
+
+      {/* Debug Info */}
+      {!isUIHidden && (
+      <div className="absolute top-4 right-4 z-20">
+        {showDebug ? (
+            <div className="bg-black/90 text-white text-xs font-mono rounded-lg p-3 space-y-2 max-w-md">
+                <div className="flex justify-between items-center mb-2">
+                    <span className="font-bold">Debug</span>
+                    <button onClick={() => setShowDebug(false)} className="text-white/70 hover:text-white"><X className="w-3 h-3" /></button>
+                </div>
+                <div>Objects: {strokesRef.current.length}</div>
+                <div>Scale: {transformRef.current.scale.toFixed(2)}x</div>
+                <div>Offset: {Math.round(transformRef.current.offset.x)}, {Math.round(transformRef.current.offset.y)}</div>
+            </div>
+        ) : (
+            <button onClick={() => setShowDebug(true)} className="bg-black/90 text-white text-xs font-mono rounded-lg p-2 hover:bg-black/95 transition-all">
+                🔍
+            </button>
+        )}
+      </div>
+      )}
 
       {/* Toolbar */}
       {!isUIHidden && (
@@ -1363,6 +1432,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
 
         <div className="w-px h-6 bg-slate-300"></div>
 
+        <button onClick={resetView} className="px-2 py-1 text-xs font-bold bg-slate-100 rounded hover:bg-slate-200 text-slate-600">100%</button>
         <button onClick={handleUndo} className="p-2 rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200" title="Undo" disabled={undoCount === 0}>
             <Undo className={`w-4 h-4 ${undoCount === 0 ? 'opacity-30' : ''}`} />
         </button>
@@ -1669,4 +1739,3 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
 };
 
 Whiteboard.displayName = 'Whiteboard';
-
