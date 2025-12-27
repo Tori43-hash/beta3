@@ -60,7 +60,6 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
   const [tool, setTool] = useState<'pen' | 'eraser' | 'pan'>('pen');
   const [color, setColor] = useState('#000000');
   const [size, setSize] = useState(3);
-  const [showDebug, setShowDebug] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [shortcuts, setShortcuts] = useState<Shortcuts>(() => {
     const saved = localStorage.getItem('whiteboard-shortcuts');
@@ -686,11 +685,44 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
   const [capturingShortcut, setCapturingShortcut] = useState<keyof Shortcuts | null>(null);
   const captureInputRef = useRef<HTMLDivElement>(null);
 
+  // Convert keyboard code to English letter (works regardless of keyboard layout)
+  const getEnglishKeyFromCode = (code: string): string => {
+    // Handle letter keys (KeyA, KeyB, etc.)
+    if (code.startsWith('Key')) {
+      return code.substring(3).toLowerCase();
+    }
+    // Handle digit keys (Digit1, Digit2, etc.)
+    if (code.startsWith('Digit')) {
+      return code.substring(5);
+    }
+    // Handle special keys - convert to lowercase and use common names
+    const specialKeys: Record<string, string> = {
+      'Space': 'space',
+      'Enter': 'enter',
+      'Escape': 'escape',
+      'Tab': 'tab',
+      'Backspace': 'backspace',
+      'Delete': 'delete',
+      'ArrowUp': 'arrowup',
+      'ArrowDown': 'arrowdown',
+      'ArrowLeft': 'arrowleft',
+      'ArrowRight': 'arrowright',
+      'Home': 'home',
+      'End': 'end',
+      'PageUp': 'pageup',
+      'PageDown': 'pagedown',
+      'Insert': 'insert',
+      'F1': 'f1', 'F2': 'f2', 'F3': 'f3', 'F4': 'f4',
+      'F5': 'f5', 'F6': 'f6', 'F7': 'f7', 'F8': 'f8',
+      'F9': 'f9', 'F10': 'f10', 'F11': 'f11', 'F12': 'f12',
+    };
+    return specialKeys[code] || code.toLowerCase();
+  };
+
   // Keyboard Handler
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
-      const code = e.code.toLowerCase();
       
       // Helper to check if shortcut matches
       const matchesShortcut = (config: ShortcutConfig): boolean => {
@@ -701,8 +733,10 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
         if (!config.shift && e.shiftKey) return false;
         if (!config.alt && e.altKey) return false;
         
+        // Use e.code to get English letter regardless of keyboard layout
+        const englishKey = getEnglishKeyFromCode(e.code);
         const configKey = config.key.toLowerCase();
-        return key === configKey || code === `key${configKey}` || code === configKey;
+        return englishKey === configKey;
       };
 
       // Hide/Show UI shortcut should always work, even when UI is hidden or settings are open
@@ -797,8 +831,11 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
       e.preventDefault();
       e.stopPropagation();
       
+      // Use e.code to get English letter regardless of keyboard layout
+      const englishKey = getEnglishKeyFromCode(e.code);
+      
       const newConfig: ShortcutConfig = {
-        key: e.key.toLowerCase(),
+        key: englishKey,
         ctrl: e.ctrlKey || e.metaKey,
         shift: e.shiftKey,
         alt: e.altKey
@@ -827,8 +864,11 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
     e.preventDefault();
     e.stopPropagation();
     
+    // Use e.code to get English letter regardless of keyboard layout
+    const englishKey = getEnglishKeyFromCode(e.code);
+    
     const newConfig: ShortcutConfig = {
-      key: e.key.toLowerCase(),
+      key: englishKey,
       ctrl: e.ctrlKey || e.metaKey,
       shift: e.shiftKey,
       alt: e.altKey
@@ -1362,27 +1402,6 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ className = "" }) => {
         onTouchMove={handleMove}
         onTouchEnd={handleEnd}
       />
-
-      {/* Debug Info */}
-      {!isUIHidden && (
-      <div className="absolute top-4 right-4 z-20">
-        {showDebug ? (
-            <div className="bg-black/90 text-white text-xs font-mono rounded-lg p-3 space-y-2 max-w-md">
-                <div className="flex justify-between items-center mb-2">
-                    <span className="font-bold">Debug</span>
-                    <button onClick={() => setShowDebug(false)} className="text-white/70 hover:text-white"><X className="w-3 h-3" /></button>
-                </div>
-                <div>Objects: {strokesRef.current.length}</div>
-                <div>Scale: {transformRef.current.scale.toFixed(2)}x</div>
-                <div>Offset: {Math.round(transformRef.current.offset.x)}, {Math.round(transformRef.current.offset.y)}</div>
-            </div>
-        ) : (
-            <button onClick={() => setShowDebug(true)} className="bg-black/90 text-white text-xs font-mono rounded-lg p-2 hover:bg-black/95 transition-all">
-                🔍
-            </button>
-        )}
-      </div>
-      )}
 
       {/* Toolbar */}
       {!isUIHidden && (
